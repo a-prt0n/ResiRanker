@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 # 1. Setup
 st.set_page_config(page_title="Residency Ranker Pro", layout="wide", page_icon="🏥")
 
-st.title("🏥 Residency Ranker Pro")
+st.title("🏥 Residency Ranker")
 st.markdown("Enter your programs and scores (1-5) below. Your rank list and charts update instantly.")
 
 # 2. Define New Categories and Default Weights
@@ -129,4 +129,5 @@ if not edited_df.empty and "Program" in edited_df.columns:
         )
         st.plotly_chart(fig_radar, use_container_width=True)
 else:
+
     st.warning("Please add at least one program and ensure the 'Program' column is filled out.")
