@@ -23,7 +23,7 @@ if "data" not in st.session_state:
     ])
 
 # 3. Upload Logic (Placed BEFORE Sidebar to ensure categories sync)
-st.title("🏥 Residency Ranker Pro")
+st.title("🏥 Residency Ranker")
 st.header("📂 1. Load Your Data")
 
 uploaded_file = st.file_uploader("Upload CSV to sync categories and scores", type="csv")
@@ -155,4 +155,5 @@ if not ranked_df.empty:
             height=600
         )
         st.plotly_chart(fig_radar, use_container_width=True)
+
 
