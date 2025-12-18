@@ -3,17 +3,17 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-# 1. Page Config
-st.set_page_config(page_title="Residency Ranker", layout="wide", page_icon="🏥")
+# 1. Page Configuration
+st.set_page_config(page_title="ResiRanker", layout="wide", page_icon="🏥")
 
-# 2. Initializing Categories
+# 2. Initialize Session State
+# This ensures your data persists even when the script reruns
 DEFAULT_CATS = [
     "Resident Happiness", "Case Exposure", "Schedule", 
     "Fellowship Match Strength", "Location Fit", "Faculty Culture/Feedback", 
     "Salary:COL", "Research Support", "Program Reputation"
 ]
 
-# Initialize session state keys if they don't exist
 if "categories" not in st.session_state:
     st.session_state.categories = DEFAULT_CATS.copy()
 
@@ -22,138 +22,135 @@ if "data" not in st.session_state:
         {"Program": "Example Hospital", **{k: 3 for k in st.session_state.categories}}
     ])
 
-# 3. Upload Logic (Placed BEFORE Sidebar to ensure categories sync)
+# 3. Handle File Upload (Only update if a NEW file is detected)
 st.title("🏥 Residency Ranker")
 st.header("📂 1. Load Your Data")
 
-uploaded_file = st.file_uploader("Upload CSV to sync categories and scores", type="csv")
+uploaded_file = st.file_uploader("Upload a CSV to sync categories and scores", type="csv")
 
+# We track the last uploaded file name to prevent it from resetting manual changes on every rerun
 if uploaded_file:
-    try:
-        df_upload = pd.read_csv(uploaded_file).fillna(3)
-        if "Program" in df_upload.columns:
-            # Sync categories: ignore Program and Final Score
-            st.session_state.categories = [c for c in df_upload.columns if c not in ["Program", "Final Score"]]
-            st.session_state.data = df_upload
-            st.success("Data synced! Check the sidebar for new weight sliders.")
-        else:
-            st.error("CSV missing 'Program' column.")
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
+    file_key = f"processed_{uploaded_file.name}"
+    if file_key not in st.session_state:
+        try:
+            df_upload = pd.read_csv(uploaded_file).fillna(3)
+            if "Program" in df_upload.columns:
+                # Sync logic
+                new_cats = [c for c in df_upload.columns if c not in ["Program", "Final Score"]]
+                st.session_state.categories = new_cats
+                st.session_state.data = df_upload
+                st.session_state[file_key] = True # Mark this file as processed
+                st.success(f"Successfully synced {len(new_cats)} categories!")
+                st.rerun() # Force refresh to show new sliders
+            else:
+                st.error("CSV must contain a 'Program' column.")
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
 
-# 4. Sidebar: Category & Weight Manager
+# 4. Sidebar: Category & Weight Management
 with st.sidebar:
     st.header("⚙️ Category Manager")
     
-    new_cat = st.text_input("Add a custom category:")
-    if st.button("Add Category") and new_cat:
-        if new_cat not in st.session_state.categories:
+    # ADD CATEGORY
+    new_cat = st.text_input("New category name:", key="new_cat_input")
+    if st.button("➕ Add Category"):
+        if new_cat and new_cat not in st.session_state.categories:
             st.session_state.categories.append(new_cat)
+            # Add the column to the existing data with default 3
+            st.session_state.data[new_cat] = 3
             st.rerun()
 
-    to_remove = st.multiselect("Remove categories:", st.session_state.categories)
-    if st.button("Remove Selected"):
-        st.session_state.categories = [c for c in st.session_state.categories if c not in to_remove]
-        st.rerun()
+    # REMOVE CATEGORY
+    st.divider()
+    to_remove = st.multiselect("Select categories to delete:", st.session_state.categories)
+    if st.button("🗑️ Remove Selected"):
+        if to_remove:
+            # Update the list
+            st.session_state.categories = [c for c in st.session_state.categories if c not in to_remove]
+            # Physically drop columns from the data
+            st.session_state.data = st.session_state.data.drop(columns=to_remove, errors='ignore')
+            st.rerun()
 
     st.divider()
     st.header("⚖️ Set Weights")
-    
     weights = {}
-    # This loop now pulls from the UPDATED session_state.categories
     for cat in st.session_state.categories:
-        weights[cat] = st.slider(f"Weight: {cat}", 0, 50, 10, key=f"w_{cat}")
+        weights[cat] = st.slider(f"{cat}", 0, 50, 10, key=f"slider_{cat}")
 
 # 5. The Editor
-st.header("📝 2. Score Programs")
-cols_to_show = ["Program"] + st.session_state.categories
+st.header("📝 2. Score Your Programs")
 
-# Fill any new columns with 3
-current_data = st.session_state.data.reindex(columns=cols_to_show).fillna(3)
+# Ensure the editor is showing the correct columns based on the current session state
+display_cols = ["Program"] + st.session_state.categories
+# Fill in any gaps that might have appeared
+current_df = st.session_state.data.reindex(columns=display_cols).fillna(3)
 
+# The editor returns a new dataframe every time a cell is changed
 edited_df = st.data_editor(
-    current_data, 
-    num_rows="dynamic", 
+    current_df,
+    num_rows="dynamic",
     use_container_width=True,
-    column_config={
-        cat: st.column_config.NumberColumn(default=3) for cat in st.session_state.categories
-    }
+    key="main_editor"
 )
 
-# Keep the session state updated
+# Crucial: Update the session state data so calculations use the latest edits
 st.session_state.data = edited_df
 
-# Save Button
+# Save/Download
 csv_bytes = edited_df.to_csv(index=False).encode('utf-8')
-st.download_button("📥 Save/Download CSV", data=csv_bytes, file_name="my_rankings.csv", mime="text/csv")
+st.download_button(
+    "📥 Download/Save CSV", 
+    data=csv_bytes, 
+    file_name="my_residency_rankings.csv", 
+    mime="text/csv"
+)
 
-# 6. Calculation Logic
-def get_rankings(df, w_dict):
+# 6. Rankings & Visuals
+def calculate_scores(df, w_dict):
     if df.empty: return df
-    df_res = df.copy()
-    total_scores = []
-    
-    for _, row in df_res.iterrows():
+    d = df.copy()
+    results = []
+    for _, row in d.iterrows():
         s = 0
         for cat, weight in w_dict.items():
             val = row.get(cat, 3)
-            # Handle manual empty entries
-            if pd.isna(val) or val == "":
-                val = 3
-            s += (float(val) / 5) * weight
-        total_scores.append(round(s, 2))
-    
-    df_res["Final Score"] = total_scores
-    return df_res.sort_values("Final Score", ascending=False).reset_index(drop=True)
+            # Handle empty strings or NaNs from the editor
+            try:
+                val_num = float(val) if pd.notnull(val) and val != "" else 3.0
+            except:
+                val_num = 3.0
+            s += (val_num / 5) * weight
+        results.append(round(s, 2))
+    d["Final Score"] = results
+    return d.sort_values("Final Score", ascending=False).reset_index(drop=True)
 
-# 7. Visuals & Comparison
 st.divider()
-ranked_df = get_rankings(edited_df, weights)
+ranked_df = calculate_scores(edited_df, weights)
 
 if not ranked_df.empty:
-    col_left, col_right = st.columns([1, 1.5])
-    with col_left:
-        st.subheader("🏆 Rank List")
-        st.dataframe(ranked_df[["Program", "Final Score"]], use_container_width=True)
+    c1, c2 = st.columns([1, 1.5])
+    with c1:
+        st.subheader("🏆 Your Rank List")
+        out = ranked_df[["Program", "Final Score"]].copy()
+        out.index += 1
+        st.dataframe(out, use_container_width=True)
 
-    with col_right:
-        st.subheader("📊 Score Breakdown")
-        fig = px.bar(ranked_df, x="Program", y="Final Score", color="Final Score", 
-                     color_continuous_scale="Viridis", text_auto=True)
+    with c2:
+        st.subheader("📊 Score Distribution")
+        fig = px.bar(ranked_df, x="Program", y="Final Score", color="Final Score", color_continuous_scale="Viridis", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
 
-    # Re-adding the Radar Comparison Map
+    # Radar Comparison
     st.divider()
-    st.subheader("🕸️ Program Comparison Map")
-    st.info("Select multiple programs to see their profiles overlap.")
-    
-    selected_progs = st.multiselect("Select programs to compare:", options=ranked_df["Program"].unique())
-    
-    if selected_progs:
+    st.subheader("🕸️ Program Comparison")
+    selected = st.multiselect("Compare these programs:", ranked_df["Program"].unique())
+    if selected:
         fig_radar = go.Figure()
-        
-        # We use the current categories for the axes
-        radar_cats = st.session_state.categories
-        
-        for prog in selected_progs:
-            prog_data = ranked_df[ranked_df["Program"] == prog].iloc[0]
-            values = [prog_data.get(c, 3) for c in radar_cats]
-            values.append(values[0]) # Close the loop
-            
-            fig_radar.add_trace(go.Scatterpolar(
-                r=values,
-                theta=radar_cats + [radar_cats[0]],
-                fill='toself',
-                name=prog
-            ))
-        
-        fig_radar.update_layout(
-            polar=dict(
-                radialaxis=dict(visible=True, range=[0, 5])
-            ),
-            showlegend=True,
-            height=600
-        )
+        cats = st.session_state.categories
+        for p in selected:
+            row = ranked_df[ranked_df["Program"] == p].iloc[0]
+            vals = [row.get(c, 3) for c in cats]
+            vals.append(vals[0])
+            fig_radar.add_trace(go.Scatterpolar(r=vals, theta=cats + [cats[0]], fill='toself', name=p))
+        fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True)
         st.plotly_chart(fig_radar, use_container_width=True)
-
-
