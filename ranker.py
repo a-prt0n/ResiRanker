@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. Page Config
-st.set_page_config(page_title="Residency Ranker Pro", layout="wide", page_icon="🏥")
+st.set_page_config(page_title="Residency Ranker", layout="wide", page_icon="🏥")
 
 # 2. Initializing Categories
 DEFAULT_CATS = [
@@ -155,3 +155,4 @@ if not ranked_df.empty:
             height=600
         )
         st.plotly_chart(fig_radar, use_container_width=True)
+
